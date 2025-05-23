@@ -1,0 +1,221 @@
+{
+  "name": "Google Maps Business Leads Scraper",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "0820fa90-ac3d-4ad5-8ccf-7c8e3d298d75",
+      "name": "When clicking \"Execute Workflow\"",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {"name": "query", "value": "restaurants in New York"},
+            {"name": "location", "value": "New York, NY, USA"},
+            {"name": "country_code", "value": "US"},
+            {"name": "language", "value": "en"}
+          ],
+          "number": [{"name": "max_results", "value": 20}]
+        }
+      },
+      "id": "f4b0a2e1-8d9c-4f3a-9b5e-1c2d3e4f5a6b",
+      "name": "Set Search Parameters",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://serpapi.com/search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "serpApi",
+        "qs": {
+          "engine": "google_maps",
+          "q": "={{ $node['Set Search Parameters'].json.query }}",
+          "location": "={{ $node['Set Search Parameters'].json.location }}",
+          "hl": "={{ $node['Set Search Parameters'].json.language }}",
+          "api_key": "={{ $credentials.serpApi.apiKey }}"
+        }
+      },
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "Google Maps Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.first().json.local_results || [];\nconst businesses = [];\n\nfor (const result of results.slice(0, $node['Set Search Parameters'].json.max_results)) {\n  businesses.push({\n    business_name: result.title || '',\n    address: result.address || '',\n    phone: result.phone || '',\n    website: result.website || '',\n    rating: result.rating || '',\n    reviews_count: result.reviews || 0,\n    business_type: result.type || '',\n    place_id: result.place_id || '',\n    gps_coordinates: result.gps_coordinates || {},\n    hours: result.hours || '',\n    description: result.snippet || ''\n  });\n}\n\nreturn businesses.map(business => ({ json: business }));"
+      },
+      "id": "b2c3d4e5-f6a7-8901-bcde-f23456789012",
+      "name": "Process Google Maps Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "c3d4e5f6-a7b8-9012-cdef-345678901234",
+      "name": "Split Into Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1140, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.website }}",
+        "options": {"timeout": 10000}
+      },
+      "id": "d4e5f6a7-b8c9-0123-defa-456789012345",
+      "name": "Crawl Website Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1360, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $input.first().json.body || '';\nconst websiteUrl = $input.first().json.url || '';\n\nlet textContent = html\n  .replace(/<script[^>]*>.*?<\\/script>/gis, '')\n  .replace(/<style[^>]*>.*?<\\/style>/gis, '')\n  .replace(/<[^>]*>/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .trim()\n  .substring(0, 3000);\n\nreturn [{\n  json: {\n    website_url: websiteUrl,\n    website_content: textContent\n  }\n}];"
+      },
+      "id": "e5f6a7b8-c9d0-1234-efab-567890123456",
+      "name": "Extract Website Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1580, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "messages": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a business data analyst. Extract and enhance business information from the provided data. Return only valid JSON with the following structure: {\"business_name\": \"\", \"email\": \"\", \"contact_person\": \"\", \"business_description\": \"\", \"services\": [], \"target_audience\": \"\", \"company_size\": \"\", \"social_media\": {}}"
+            },
+            {
+              "role": "user",
+              "content": "Business Information:\nName: {{ $node['Split Into Batches'].json.business_name }}\nAddress: {{ $node['Split Into Batches'].json.address }}\nPhone: {{ $node['Split Into Batches'].json.phone }}\nWebsite: {{ $node['Split Into Batches'].json.website }}\nDescription: {{ $node['Split Into Batches'].json.description }}\n\nWebsite Content:\n{{ $json.website_content }}\n\nPlease extract additional business details and potential contact information from this data."
+            }
+          ]
+        },
+        "options": {"temperature": 0.3}
+      },
+      "id": "f6a7b8c9-d0e1-2345-fabc-678901234567",
+      "name": "OpenAI Business Data Enhancement",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [1800, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const originalData = $node['Split Into Batches'].json;\nconst websiteData = $node['Extract Website Content'].json;\nconst aiData = JSON.parse($input.first().json.content || '{}');\n\nconst mergedData = {\n  business_name: originalData.business_name,\n  address: originalData.address,\n  phone: originalData.phone,\n  website: originalData.website,\n  rating: originalData.rating,\n  reviews_count: originalData.reviews_count,\n  business_type: originalData.business_type,\n  place_id: originalData.place_id,\n  gps_coordinates: originalData.gps_coordinates,\n  hours: originalData.hours,\n  email: aiData.email || '',\n  contact_person: aiData.contact_person || '',\n  business_description: aiData.business_description || originalData.description,\n  services: aiData.services || [],\n  target_audience: aiData.target_audience || '',\n  company_size: aiData.company_size || '',\n  social_media: aiData.social_media || {},\n  website_content_preview: websiteData.website_content ? websiteData.website_content.substring(0, 200) + '...' : '',\n  scraped_at: new Date().toISOString(),\n  data_source: 'Google Maps + AI Enhancement'\n};\n\nreturn [{ json: mergedData }];"
+      },
+      "id": "a7b8c9d0-e1f2-3456-abcd-789012345678",
+      "name": "Merge and Format Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2020, 300]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "YOUR_GOOGLE_SHEET_ID",
+        "sheetName": "Business Leads",
+        "columnToMatchOn": "business_name",
+        "valuesToMatchOn": "={{ $json.business_name }}",
+        "options": {"headerRow": 1}
+      },
+      "id": "b8c9d0e1-f2a3-4567-bcde-890123456789",
+      "name": "Save to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2240, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://serpapi.com/search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "serpApi",
+        "qs": {
+          "engine": "google",
+          "q": "{{ $node['Split Into Batches'].json.business_name }} contact email",
+          "location": "={{ $node['Set Search Parameters'].json.location }}",
+          "api_key": "={{ $credentials.serpApi.apiKey }}"
+        }
+      },
+      "id": "c9d0e1f2-a3b4-5678-cdef-901234567890",
+      "name": "Search for Additional Contact Info",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1360, 500],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const searchResults = $input.first().json.organic_results || [];\nconst emails = [];\n\nfor (const result of searchResults) {\n  const snippet = result.snippet || '';\n  const title = result.title || '';\n  const content = snippet + ' ' + title;\n  \n  const emailRegex = /\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b/g;\n  const foundEmails = content.match(emailRegex) || [];\n  emails.push(...foundEmails);\n}\n\nconst uniqueEmails = [...new Set(emails)]\n  .filter(email => !email.includes('noreply'))\n  .filter(email => !email.includes('no-reply'))\n  .filter(email => !email.includes('example'));\n\nreturn [{\n  json: {\n    found_emails: uniqueEmails,\n    search_performed: true\n  }\n}];"
+      },
+      "id": "d0e1f2a3-b4c5-6789-defa-012345678901",
+      "name": "Extract Contact Emails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1580, 500]
+    }
+  ],
+  "connections": {
+    "When clicking \"Execute Workflow\"": {
+      "main": [[{"node": "Set Search Parameters", "type": "main", "index": 0}]]
+    },
+    "Set Search Parameters": {
+      "main": [[{"node": "Google Maps Search", "type": "main", "index": 0}]]
+    },
+    "Google Maps Search": {
+      "main": [[{"node": "Process Google Maps Data", "type": "main", "index": 0}]]
+    },
+    "Process Google Maps Data": {
+      "main": [[{"node": "Split Into Batches", "type": "main", "index": 0}]]
+    },
+    "Split Into Batches": {
+      "main": [[
+        {"node": "Crawl Website Content", "type": "main", "index": 0},
+        {"node": "Search for Additional Contact Info", "type": "main", "index": 0}
+      ]]
+    },
+    "Crawl Website Content": {
+      "main": [[{"node": "Extract Website Content", "type": "main", "index": 0}]]
+    },
+    "Extract Website Content": {
+      "main": [[{"node": "OpenAI Business Data Enhancement", "type": "main", "index": 0}]]
+    },
+    "OpenAI Business Data Enhancement": {
+      "main": [[{"node": "Merge and Format Data", "type": "main", "index": 0}]]
+    },
+    "Merge and Format Data": {
+      "main": [[{"node": "Save to Google Sheets", "type": "main", "index": 0}]]
+    },
+    "Search for Additional Contact Info": {
+      "main": [[{"node": "Extract Contact Emails", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "tags": [
+    {"id": "lead-generation", "name": "Lead Generation"},
+    {"id": "google-maps", "name": "Google Maps"},
+    {"id": "openai", "name": "OpenAI"},
+    {"id": "automation", "name": "Automation"}
+  ],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "google-maps-leads-scraper",
+  "versionId": "1.0.0"
+}
